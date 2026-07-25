@@ -1,5 +1,6 @@
 import type { AppState } from "@/state/appState";
-import type { ExcalidrawElement } from "@/element/type";
+import type { ExcalidrawElement } from "@/element/types";
+import { renderElement } from "./renderElement";
 
 interface RenderParams {
     canvas: HTMLCanvasElement;
@@ -9,7 +10,7 @@ interface RenderParams {
     dpr:number;
 }
 
-export function renderScene({canvas,ctx,appState,dpr}:RenderParams){
+export function renderScene({canvas,ctx,elements,appState,dpr}:RenderParams){
     //清空屏幕
     ctx.save();
     ctx.setTransform(1,0,0,1,0,0);
@@ -39,5 +40,8 @@ export function renderScene({canvas,ctx,appState,dpr}:RenderParams){
     ctx.lineTo(0,50);
     ctx.stroke();
 
+    for(const el of elements){
+        renderElement(ctx, el);
+    }
     ctx.restore();
 }

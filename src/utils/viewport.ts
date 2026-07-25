@@ -1,5 +1,5 @@
 //视口坐标转换
-import type { CanvasPoint, ScreenPoint, Viewport } from '@/type';
+import type { CanvasPoint, ScreenPoint, Viewport } from '@/types';
 import { MIN_ZOOM, MAX_ZOOM } from '../constants';
 
 //屏幕像素 -> 画布世界坐标

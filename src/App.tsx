@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { Canvas } from "@/components/canvas/Canvas";
 import { Toolbar } from "@/components/tool-bar/Toolbar";
-import { StatusBar } from "@/components/status-bar/StautsBar";
+import { StatusBar } from "@/components/status-bar/StatusBar";
 import { createInitialAppState, type AppState } from '@/state/appState';
-import type { ExcalidrawElement } from "@/element/type";
+import type { ExcalidrawElement } from "@/element/types";
 
 export default function App(){
   const [appState, setAppState] = useState<AppState>(createInitialAppState);
-  const [element] = useState<ExcalidrawElement[]>([]);
+  const [element, setElements] = useState<ExcalidrawElement[]>([]);
   
   const patchAppState = (patch: Partial<AppState>) => {
     return setAppState(prev => ({...prev, ...patch}));
@@ -18,6 +18,7 @@ export default function App(){
         elements={element}
         appState={appState}
         onAppStateChange={patchAppState}
+        setElements={setElements}
       />
       <Toolbar
         currentTool={appState.currentTool}
