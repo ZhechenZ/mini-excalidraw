@@ -1,0 +1,37 @@
+.toolbar {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 4px;
+    background: #fff;
+    border-radius: 8px;
+    padding: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    user-select: none;
+}
+
+.toolbar__btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    background: transparent;
+    font-size: 16px;
+    color: #333;
+    transition: background 0.15s ease;
+}
+
+.toolbar__btn:hover {
+    background: #f1f5f9;
+}
+
+.toolbar__btn:active {
+    background: #e2e8f0;
+}
+
+.toolbar__btn--active:hover {
+    background: #c7d2fe;
+}

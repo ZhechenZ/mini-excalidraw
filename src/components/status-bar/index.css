@@ -1,0 +1,19 @@
+.status-bar {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    display: flex;
+    gap: 12px;
+    padding: 6px 10px;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    font-size: 12px;
+    color: #555;
+    user-select: none;
+}
+
+.status-bar__item {
+    /* 预留: 以后想给每一项加分隔线、图标可有直接改这里*/
+    white-space:nowrap;
+}
