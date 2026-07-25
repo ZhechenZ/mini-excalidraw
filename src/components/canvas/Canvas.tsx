@@ -120,7 +120,7 @@ export function Canvas({elements, appState, onAppStateChange}: CanvasProps) {
         if(panStart.current){
             onAppStateChange({
                 scrollX: panStart.current.scrollX + (e.clientX - panStart.current.x),
-                scrollY: panStart.current.scrollY = (e.clientY - panStart.current.y),
+                scrollY: panStart.current.scrollY + (e.clientY - panStart.current.y),
             });
         }
     };
