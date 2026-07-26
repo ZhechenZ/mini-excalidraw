@@ -211,7 +211,10 @@ export function Canvas({
     // ② 绘制工具
     const tool = appState.currentTool;
     if (DRAWABLE_TOOLS.includes(tool as DrawableTool)) {
-      const el = newElementByTool(tool as DrawableTool, { x: p.x, y: p.y });
+      const el = newElementByTool(
+        appState.currentTool as DrawableTool,
+        {x: p.x, y: p.y},
+        { roughness: appState.currentRoughness });
       interactionRef.current = { type: 'draft', element: el };
       invalidate();
       return;

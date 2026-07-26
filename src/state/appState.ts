@@ -16,6 +16,7 @@ export interface AppState {
         width:number;
         height:number;
     } | null;
+    currentRoughness: number;
 }
 
 export function createInitialAppState(): AppState {
@@ -27,5 +28,6 @@ export function createInitialAppState(): AppState {
         cursor:null,
         selectedElementIds:{},
         marquee:null,
+        currentRoughness: 1,
     };
 }

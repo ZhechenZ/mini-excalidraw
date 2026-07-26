@@ -53,15 +53,29 @@ export function newArrowElement(p:NewElementProps): ExcalidrawArrowElement {
 }
 
 export function newElementByTool(
-    tool:'rectangle' | 'ellipse' | 'line' | 'arrow',
-    p: NewElementProps,
-):ExcalidrawElement{
-    switch(tool){
-        case 'rectangle': return newRectangleElement(p);
-        case 'ellipse': return newEllipseElement(p);
-        case 'line': return newLineElement(p);
-        case 'arrow': return newArrowElement(p);
-    }
+  tool: 'rectangle' | 'ellipse' | 'line' | 'arrow',
+  p: NewElementProps,
+  opts: { roughness: number },
+): ExcalidrawElement {
+  let el: ExcalidrawElement;
+  switch (tool) {
+    case 'rectangle':
+      el = newRectangleElement(p);
+      break;
+    case 'ellipse':
+      el = newEllipseElement(p);
+      break;
+    case 'line':
+      el = newLineElement(p);
+      break;
+    case 'arrow':
+      el = newArrowElement(p);
+      break;
+    default:
+      throw new Error(`unsupported drawing tool: ${tool}`);
+  }
+  el.roughness = opts.roughness;
+  return el;
 }
 
 //拖动过程中更新终点: 把(x2, y2)转成(x,y,width,height)

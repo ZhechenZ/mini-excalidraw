@@ -35,3 +35,11 @@
 .toolbar__btn--active:hover {
     background: #c7d2fe;
 }
+
+.toolbar__divider {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  background: #e5e7eb;
+  margin: 0 8px;
+}

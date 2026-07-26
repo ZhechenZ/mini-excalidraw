@@ -115,7 +115,9 @@ export default function App() {
       />
       <Toolbar
         currentTool={appState.currentTool}
-        onToolChange={(t) => patchAppState({ currentTool: t })}
+        onToolChange={(tool) => patchAppState({ currentTool: tool })}
+        roughness={appState.currentRoughness}
+        onRoughnessChange={(v) => patchAppState({ currentRoughness: v })}
       />
       <StatusBar cursor={appState.cursor} zoom={appState.zoom} />
     </>
