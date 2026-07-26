@@ -16,23 +16,48 @@ export function renderSelection(
   ctx.save();
   ctx.strokeStyle = '#6965db';
   ctx.lineWidth = 1 / zoom;
+
+  // ✅ Day 6：单选并且带有旋转时，坐标系旋转对齐元素，绘制选中框与手柄
+  const isSingleRotated = selected.length === 1 && !!selected[0].angle;
+  if (isSingleRotated) {
+    const el = selected[0];
+    const cx = el.x + el.width / 2;
+    const cy = el.y + el.height / 2;
+    ctx.translate(cx, cy);
+    ctx.rotate(el.angle);
+    ctx.translate(-cx, -cy);
+  }
+
   ctx.setLineDash([4 / zoom, 4 / zoom]);
   ctx.strokeRect(x, y, w, h);
   ctx.setLineDash([]);
 
-  // 8 个手柄（位置从 transformHandles 单一来源）
   const handles = getTransformHandles(selected, zoom);
   ctx.fillStyle = '#fff';
   for (const hd of handles) {
-    ctx.beginPath();
-    ctx.rect(hd.x - hd.size / 2, hd.y - hd.size / 2, hd.size, hd.size);
-    ctx.fill();
-    ctx.stroke();
+    if (hd.direction === 'rotate') {
+      // 连接线：包围盒顶部中点 → 旋转手柄
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2, y);
+      ctx.lineTo(hd.x, hd.y + hd.size / 2);
+      ctx.stroke();
+      // 圆形旋转手柄
+      ctx.beginPath();
+      ctx.arc(hd.x, hd.y, hd.size / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      // 方形缩放手柄
+      ctx.beginPath();
+      ctx.rect(hd.x - hd.size / 2, hd.y - hd.size / 2, hd.size, hd.size);
+      ctx.fill();
+      ctx.stroke();
+    }
   }
+
   ctx.restore();
 }
 
-// 框选矩形（进行中）
 export function renderMarquee(
   ctx: CanvasRenderingContext2D,
   m: { x: number; y: number; width: number; height: number },

@@ -1,21 +1,28 @@
 import type { ExcalidrawElement } from './types';
 import { getCommonBounds } from './bounds';
 
-export type HandleDirection = 'nw' | 'n' | 'ne' | 'w' | 'e' | 'sw' | 's' | 'se';
+export type HandleDirection =
+  | 'nw' | 'n' | 'ne'
+  | 'w' | 'e'
+  | 'sw' | 's' | 'se'
+  | 'rotate';
 
 export interface TransformHandle {
   direction: HandleDirection;
-  x: number;     // canvas 坐标下的手柄中心
+  x: number;
   y: number;
-  size: number;  // canvas 坐标下的手柄边长
+  size: number;
 }
 
-const HANDLE_PIXEL = 8;    // 手柄屏幕像素大小
-const HIT_TOLERANCE = 4;   // 命中额外容差（像素）
+const HANDLE_PIXEL = 8;
+const HIT_TOLERANCE = 4;
+const ROTATE_OFFSET_PIXEL = 30; // rotate handle 距离顶边 30 屏幕像素
 
 /**
- * 计算选中元素集合的 8 个 transform 手柄位置
- * 返回值在 canvas 坐标系下（未受 zoom/scroll 变换），size 已按 zoom 换算
+ * 计算选中元素的 transform handles。
+ * - 多选：只返回 8 个方向手柄（不支持旋转）
+ * - 单选：额外返回 1 个 rotate 手柄，位于顶边正上方
+ * 返回坐标始终在「元素/共同 AABB 的本地坐标系」下（未应用 el.angle 旋转）。
  */
 export function getTransformHandles(
   selected: ExcalidrawElement[],
@@ -30,21 +37,29 @@ export function getTransformHandles(
   const h = (b.y2 - b.y1) + pad * 2;
   const size = HANDLE_PIXEL / zoom;
 
-  return [
-    { direction: 'nw', x: x,         y: y,         size },
-    { direction: 'n',  x: x + w / 2, y: y,         size },
-    { direction: 'ne', x: x + w,     y: y,         size },
-    { direction: 'w',  x: x,         y: y + h / 2, size },
-    { direction: 'e',  x: x + w,     y: y + h / 2, size },
-    { direction: 'sw', x: x,         y: y + h,     size },
-    { direction: 's',  x: x + w / 2, y: y + h,     size },
-    { direction: 'se', x: x + w,     y: y + h,     size },
+  const handles: TransformHandle[] = [
+    { direction: 'nw', x: x,           y: y,           size },
+    { direction: 'n',  x: x + w / 2,   y: y,           size },
+    { direction: 'ne', x: x + w,       y: y,           size },
+    { direction: 'w',  x: x,           y: y + h / 2,   size },
+    { direction: 'e',  x: x + w,       y: y + h / 2,   size },
+    { direction: 'sw', x: x,           y: y + h,       size },
+    { direction: 's',  x: x + w / 2,   y: y + h,       size },
+    { direction: 'se', x: x + w,       y: y + h,       size },
   ];
+
+  if (selected.length === 1) {
+    handles.push({
+      direction: 'rotate',
+      x: x + w / 2,
+      y: y - ROTATE_OFFSET_PIXEL / zoom,
+      size,
+    });
+  }
+
+  return handles;
 }
 
-/**
- * 命中检测：canvas 坐标是否落在某个手柄上，返回命中的方向
- */
 export function hitTransformHandle(
   handles: TransformHandle[],
   px: number,
@@ -54,23 +69,33 @@ export function hitTransformHandle(
   const tolerance = HIT_TOLERANCE / zoom;
   for (const h of handles) {
     const half = h.size / 2 + tolerance;
-    if (Math.abs(px - h.x) <= half && Math.abs(py - h.y) <= half) {
-      return h.direction;
+    if (h.direction === 'rotate') {
+      // 圆形手柄：欧氏距离
+      if (Math.hypot(px - h.x, py - h.y) <= half) return 'rotate';
+    } else {
+      if (Math.abs(px - h.x) <= half && Math.abs(py - h.y) <= half) {
+        return h.direction;
+      }
     }
   }
   return null;
 }
 
-/** 手柄方向 → CSS cursor */
 export function handleToCursor(dir: HandleDirection): string {
   switch (dir) {
     case 'n':
-    case 's':  return 'ns-resize';
+    case 's':
+      return 'ns-resize';
     case 'e':
-    case 'w':  return 'ew-resize';
+    case 'w':
+      return 'ew-resize';
     case 'nw':
-    case 'se': return 'nwse-resize';
+    case 'se':
+      return 'nwse-resize';
     case 'ne':
-    case 'sw': return 'nesw-resize';
+    case 'sw':
+      return 'nesw-resize';
+    case 'rotate':
+      return 'grab';
   }
 }
