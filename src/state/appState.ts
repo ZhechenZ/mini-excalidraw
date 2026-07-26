@@ -9,6 +9,13 @@ export interface AppState {
         x:number,
         y:number,
     } | null;
+    selectedElementIds: Record<string, true>;
+    marquee: {
+        x:number;
+        y:number;
+        width:number;
+        height:number;
+    } | null;
 }
 
 export function createInitialAppState(): AppState {
@@ -18,5 +25,7 @@ export function createInitialAppState(): AppState {
         scrollY:0,
         zoom:1,
         cursor:null,
-    }
+        selectedElementIds:{},
+        marquee:null,
+    };
 }
