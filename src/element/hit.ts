@@ -13,6 +13,7 @@ export function hitTest(
         case 'ellipse': return hitEllipse(el,px,py);
         case 'line':
         case 'arrow': return hitLine(el,px,py);
+        default: return false;
     }
 }
 
@@ -49,7 +50,8 @@ function hitEllipse(
     const value = ((px - cx) / a) ** 2 + ((py - cy) / b) ** 2;
     if(el.backgroundColor !== 'transparent') return value<=1;
     //只命中边框
-    return Math.abs(value - 1) < 0.15;
+    const scale = 2 / (a+b);
+    return Math.abs(value - 1) < scale * THRESHOLD;
 }
 
 //线段: 点到线段的最短距离 <= THRESHOLD
@@ -60,7 +62,7 @@ function hitLine(
 ):boolean{
     const x1 = el.x, y1 = el.y;
     const x2 = el.x + el.width, y2 = el.y + el.height;
-    return pointToSegmentDistance(px, py, x1, y1, x2, y2) < THRESHOLD;
+    return pointToSegmentDistance(px, py, x1, y1, x2, y2) <= THRESHOLD;
 }
 
 //通用几何: 点到线段的距离
@@ -74,7 +76,7 @@ export function pointToSegmentDistance(
     const lenSq = dx * dx + dy * dy;
     if(lenSq === 0) return Math.hypot(px - x1, py - y1);
 
-    let t = ((px - x1) * dx) +  ((py - y1) * dy) / lenSq;
+    let t = ((px - x1) * dx +  (py - y1) * dy) / lenSq;
     t = Math.max(0,Math.min(1,t));
     const projX = x1 + t * dx;
     const projY = y1 + t * dy;

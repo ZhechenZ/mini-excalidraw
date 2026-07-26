@@ -33,7 +33,7 @@ function renderRectangle(
     ctx: CanvasRenderingContext2D,
     el:ExcalidrawElement,
 ){
-    if(el.backgroundColor !== 'treansparent'){
+    if(el.backgroundColor !== 'transparent'){
         ctx.fillRect(el.x, el.y, el.width, el.height);
     }
 

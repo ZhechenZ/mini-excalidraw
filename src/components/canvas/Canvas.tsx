@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ExcalidrawElement } from '@/element/types';
 import type { AppState } from '@/state/appState';
+import type { Bounds } from '@/element/bounds';
 import { MAX_ZOOM, MIN_ZOOM } from '@/constants';
 import { screenToCanvas } from '@/utils/viewport';
 import { renderScene } from '@/renderer/renderScene';
 import { newElementByTool, mutateElementEnd, normalizeElement } from '@/element/newElement';
 import { hitTest, hitMarquee } from '@/element/hit';
 import { translateElement } from '@/element/mutate';
+import { getCommonBounds } from '@/element/bounds';
+import {
+  getTransformHandles,
+  hitTransformHandle,
+  handleToCursor,
+  type HandleDirection,
+} from '@/element/transformHandles';
+import { computeNewBounds, resizeElementByBounds } from '@/element/resize';
 
 // ─── 类型 ───
 interface CanvasProps {
@@ -22,26 +31,37 @@ type DrawableTool = (typeof DRAWABLE_TOOLS)[number];
 // 统一交互状态
 type Interaction =
   | { type: 'idle' }
-  | { type: 'pan'; startX: number; startY: number; scrollX: number; scrollY: number }
-  | { type: 'draft'; element: ExcalidrawElement }
-  | { type: 'move'; startX: number; startY: number; originals: Record<string, ExcalidrawElement> }
-  | { type: 'marquee'; startX: number; startY: number };
+  | { type: 'pan';    startX: number; startY: number; scrollX: number; scrollY: number }
+  | { type: 'draft';  element: ExcalidrawElement }
+  | { type: 'move';   startX: number; startY: number; originals: Record<string, ExcalidrawElement> }
+  | { type: 'marquee'; startX: number; startY: number }
+  | { type: 'resize'; handle: HandleDirection; originalBounds: Bounds; originals: Record<string, ExcalidrawElement> };
 
-function toolToCursor(tool: string, isSpaceDown: boolean, interaction: Interaction) {
-  if (interaction.type === 'pan') return 'grabbing';
+function toolToCursor(
+  tool: string,
+  isSpaceDown: boolean,
+  interaction: Interaction,
+  hoveredHandle: HandleDirection | null,
+) {
+  if (interaction.type === 'resize') return handleToCursor(interaction.handle);
+  if (interaction.type === 'pan')    return 'grabbing';
+  if (hoveredHandle && tool === 'selection' && interaction.type === 'idle') {
+    return handleToCursor(hoveredHandle);
+  }
   if (isSpaceDown) return 'grab';
   switch (tool) {
     case 'selection': return 'default';
-    case 'text': return 'text';
-    default: return 'crosshair';
+    case 'text':      return 'text';
+    default:          return 'crosshair';
   }
 }
 
-// ─── 组件 ──
+// ─── 组件 ───
 export function Canvas({ elements, setElements, appState, onAppStateChange }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dpr, setDpr] = useState(window.devicePixelRatio || 1);
   const [isSpaceDown, setIsSpaceDown] = useState(false);
+  const [hoveredHandle, setHoveredHandle] = useState<HandleDirection | null>(null);
   const interactionRef = useRef<Interaction>({ type: 'idle' });
   const [tick, setTick] = useState(0);
   const invalidate = useCallback(() => setTick(t => t + 1), []);
@@ -53,9 +73,9 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
     const resize = () => {
       const d = window.devicePixelRatio || 1;
       setDpr(d);
-      canvas.width = window.innerWidth * d;
+      canvas.width  = window.innerWidth * d;
       canvas.height = window.innerHeight * d;
-      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.width  = `${window.innerWidth}px`;
       canvas.style.height = `${window.innerHeight}px`;
     };
     resize();
@@ -66,10 +86,13 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
   // ─ 空格 ─
   useEffect(() => {
     const down = (e: KeyboardEvent) => { if (e.code === 'Space') setIsSpaceDown(true); };
-    const up = (e: KeyboardEvent) => { if (e.code === 'Space') setIsSpaceDown(false); };
+    const up   = (e: KeyboardEvent) => { if (e.code === 'Space') setIsSpaceDown(false); };
     window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+    window.addEventListener('keyup',   up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup',   up);
+    };
   }, []);
 
   // ─ 渲染 ─
@@ -80,9 +103,7 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
     if (!ctx) return;
     const interaction = interactionRef.current;
     let list = elements;
-    if (interaction.type === 'draft') {
-      list = [...elements, interaction.element];
-    }
+    if (interaction.type === 'draft') list = [...elements, interaction.element];
     renderScene({ canvas, ctx, elements: list, appState, dpr });
   }, [elements, appState, dpr, tick]);
 
@@ -92,21 +113,29 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
       const delta = -e.deltaY * 0.01;
       const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, appState.zoom * (1 + delta)));
       const before = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
-      onAppStateChange({ zoom: nextZoom, scrollX: e.clientX - before.x * nextZoom, scrollY: e.clientY - before.y * nextZoom });
+      onAppStateChange({
+        zoom: nextZoom,
+        scrollX: e.clientX - before.x * nextZoom,
+        scrollY: e.clientY - before.y * nextZoom,
+      });
     } else {
-      onAppStateChange({ scrollX: appState.scrollX - e.deltaX, scrollY: appState.scrollY - e.deltaY });
+      onAppStateChange({
+        scrollX: appState.scrollX - e.deltaX,
+        scrollY: appState.scrollY - e.deltaY,
+      });
     }
   };
 
-  //onPointerDown：三路分发
+  // ─ onPointerDown：优先级 = 平移 > resize手柄 > 元素命中 > 空白（marquee） ─
   const onPointerDown = (e: React.PointerEvent) => {
     const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
-    // ① 平移（中键 或 空格+左键）
+    // ① 平移
     if (e.button === 1 || (isSpaceDown && e.button === 0)) {
       interactionRef.current = {
-        type: 'pan', startX: e.clientX, startY: e.clientY,
+        type: 'pan',
+        startX: e.clientX, startY: e.clientY,
         scrollX: appState.scrollX, scrollY: appState.scrollY,
       };
       invalidate();
@@ -125,39 +154,68 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
 
     // ③ selection 工具
     if (tool === 'selection') {
-      // 从上往下找命中（数组越后面的越"在上面"）
-      const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
+      const selected = elements.filter(el => appState.selectedElementIds[el.id]);
 
+      // ③.1 先看点没点在 resize 手柄上（只有已选中时才有手柄）
+      if (selected.length > 0) {
+        const handles = getTransformHandles(selected, appState.zoom);
+        const handle = hitTransformHandle(handles, p.x, p.y, appState.zoom);
+        if (handle) {
+          const originalBounds = getCommonBounds(selected);
+          const originals: Record<string, ExcalidrawElement> = {};
+          for (const el of selected) originals[el.id] = el;
+          interactionRef.current = { type: 'resize', handle, originalBounds, originals };
+          invalidate();
+          return;
+        }
+      }
+
+      // ③.2 点在了某个元素上
+      const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
       if (hit) {
-        // 命中了元素 → 选中它 → 进入移动模式
         let nextIds = { ...appState.selectedElementIds };
         const isSelected = !!nextIds[hit.id];
 
         if (e.shiftKey) {
-          // Shift: toggle
           if (isSelected) delete nextIds[hit.id];
-          else nextIds[hit.id] = true;
+          else            nextIds[hit.id] = true;
         } else if (!isSelected) {
-          // 非 Shift + 没选中过 → 只选中这一个
           nextIds = { [hit.id]: true };
         }
-        // 如果已经选中且没有 Shift，保持原选集（方便多选拖动）
 
         onAppStateChange({ selectedElementIds: nextIds });
 
-        // 快照选中元素的初始位置
         const originals: Record<string, ExcalidrawElement> = {};
-        for (const el of elements) {
-          if (nextIds[el.id]) originals[el.id] = el;
-        }
+        for (const el of elements) if (nextIds[el.id]) originals[el.id] = el;
+        interactionRef.current = { type: 'move', startX: p.x, startY: p.y, originals };
+        invalidate();
+        return;
       }
+
+      // ③.3 点在空白 → 清选择（除非 Shift）+ 开框选
+      if (!e.shiftKey) onAppStateChange({ selectedElementIds: {} });
+      interactionRef.current = { type: 'marquee', startX: p.x, startY: p.y };
+      invalidate();
+      return;
     }
   };
 
+  // ─ onPointerMove ─
   const onPointerMove = (e: React.PointerEvent) => {
     const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
     onAppStateChange({ cursor: p });
     const interaction = interactionRef.current;
+
+    // 空闲状态下更新 hover 手柄
+    if (interaction.type === 'idle' && appState.currentTool === 'selection') {
+      const selected = elements.filter(el => appState.selectedElementIds[el.id]);
+      if (selected.length > 0) {
+        const handles = getTransformHandles(selected, appState.zoom);
+        setHoveredHandle(hitTransformHandle(handles, p.x, p.y, appState.zoom));
+      } else if (hoveredHandle) {
+        setHoveredHandle(null);
+      }
+    }
 
     if (interaction.type === 'pan') {
       onAppStateChange({
@@ -192,17 +250,30 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
         marquee: {
           x: interaction.startX,
           y: interaction.startY,
-          width: p.x - interaction.startX,
+          width:  p.x - interaction.startX,
           height: p.y - interaction.startY,
         },
       });
       return;
     }
+
+    if (interaction.type === 'resize') {
+      const newBounds = computeNewBounds(
+        interaction.handle,
+        interaction.originalBounds,
+        p.x, p.y,
+        e.shiftKey,
+      );
+      setElements(prev => prev.map(el =>
+        interaction.originals[el.id]
+          ? resizeElementByBounds(interaction.originals[el.id], interaction.originalBounds, newBounds)
+          : el
+      ));
+      return;
+    }
   };
 
-  // ═══════════════════════════════════════
-  // ★ onPointerUp：收尾
-  // ═══════════════════════════════════════
+  // ─ onPointerUp ─
   const onPointerUp = (e: React.PointerEvent) => {
     (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     const interaction = interactionRef.current;
@@ -227,22 +298,25 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
 
     if (interaction.type === 'move') {
       interactionRef.current = { type: 'idle' };
-      // 元素已经在 move 过程中更新完了，不需要额外操作
       return;
     }
 
     if (interaction.type === 'marquee') {
-      // 计算框选了哪些元素
       const m = appState.marquee;
       if (m) {
         const nextIds: Record<string, true> = { ...appState.selectedElementIds };
-        for (const el of elements) {
-          if (hitMarquee(el, m)) nextIds[el.id] = true;
-        }
+        for (const el of elements) if (hitMarquee(el, m)) nextIds[el.id] = true;
         onAppStateChange({ selectedElementIds: nextIds, marquee: null });
       } else {
         onAppStateChange({ marquee: null });
       }
+      interactionRef.current = { type: 'idle' };
+      invalidate();
+      return;
+    }
+
+    if (interaction.type === 'resize') {
+      // resize 过程中元素已经实时更新
       interactionRef.current = { type: 'idle' };
       invalidate();
       return;
@@ -269,7 +343,14 @@ export function Canvas({ elements, setElements, appState, onAppStateChange }: Ca
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onKeyDown={onKeyDown}
-      style={{ cursor: toolToCursor(appState.currentTool, isSpaceDown, interactionRef.current) }}
+      style={{
+        cursor: toolToCursor(
+          appState.currentTool,
+          isSpaceDown,
+          interactionRef.current,
+          hoveredHandle,
+        ),
+      }}
     />
   );
 }

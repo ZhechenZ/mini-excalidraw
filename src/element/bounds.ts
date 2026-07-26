@@ -12,7 +12,7 @@ export function getElementBounds(el:ExcalidrawElement):Bounds{
     const y1 = Math.min(el.y,el.y + el.height);
     const x2 = Math.max(el.x, el.x + el.width);
     const y2 = Math.max(el.y, el.y + el.height);
-    return {x1,y1,x2,y2};;
+    return {x1,y1,x2,y2};
 }
 
 // 多个元素合并成一个大的 bounding box (拖动多选 or 框选缩放要用)
