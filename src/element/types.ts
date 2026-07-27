@@ -33,8 +33,14 @@ export interface ExcalidrawArrowElement extends ExcalidrawElementBase {
     type: 'arrow';
 }
 
+export interface ExcalidrawFreedrawElement extends ExcalidrawElementBase {
+    type:'freedraw';
+    points:[number, number, number][];
+}
+
 export type ExcalidrawElement = 
     | ExcalidrawRectangleElement
     | ExcalidrawEllipseElement
     | ExcalidrawLineElement
-    | ExcalidrawArrowElement;
+    | ExcalidrawArrowElement
+    | ExcalidrawFreedrawElement;

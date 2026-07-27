@@ -10,6 +10,7 @@
     padding: 6px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
     user-select: none;
+    z-index: 20;
 }
 
 .toolbar__btn {
@@ -24,22 +25,68 @@
     transition: background 0.15s ease;
 }
 
-.toolbar__btn:hover {
-    background: #f1f5f9;
-}
-
-.toolbar__btn:active {
-    background: #e2e8f0;
-}
-
-.toolbar__btn--active:hover {
-    background: #c7d2fe;
-}
+.toolbar__btn:hover  { background: #f1f5f9; }
+.toolbar__btn:active { background: #e2e8f0; }
+.toolbar__btn--active         { background: #dbeafe; }
+.toolbar__btn--active:hover   { background: #c7d2fe; }
 
 .toolbar__divider {
-  display: inline-block;
-  width: 1px;
-  height: 20px;
-  background: #e5e7eb;
-  margin: 0 8px;
+    display: inline-block;
+    width: 1px;
+    height: 20px;
+    background: #e5e7eb;
+    margin: 0 8px;
 }
+
+/* Week 1：PropertyPanel */
+.prop-panel {
+    position: fixed;
+    top: 72px;
+    right: 16px;
+    background: #fff;
+    border-radius: 10px;
+    padding: 12px 14px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 12px;
+    z-index: 20;
+    user-select: none;
+}
+
+.prop-panel__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.prop-panel__label {
+    width: 36px;
+    color: #555;
+}
+
+.prop-panel__chips {
+    display: flex;
+    gap: 4px;
+}
+
+.chip {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    cursor: pointer;
+    padding: 0;
+    font-size: 11px;
+    background: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #333;
+}
+
+.chip--wide { width: 30px; }
+
+.chip:hover        { border-color: #999; }
+.chip--active      { outline: 2px solid #1971c2; outline-offset: 1px; }
