@@ -1,21 +1,15 @@
-import type { ExcalidrawElement, ExcalidrawFreedrawElement } from './types';
+import type { ExcalidrawElement, ExcalidrawFreedrawElement, ExcalidrawTextElement } from './types';
 import { getElementBounds } from './bounds';
 import { rotatePoint } from './rotate';
 
 const THRESHOLD = 6;
 
-export function hitTest(
-    el: ExcalidrawElement,
-    px: number,
-    py: number,
-): boolean {
-    // 把 pointer 反向旋转到元素本地坐标系再做具体判定
+export function hitTest(el: ExcalidrawElement, px: number, py: number): boolean {
     if (el.angle) {
         const cx = el.x + el.width / 2;
         const cy = el.y + el.height / 2;
         const p = rotatePoint(px, py, cx, cy, -el.angle);
-        px = p.x;
-        py = p.y;
+        px = p.x; py = p.y;
     }
     switch (el.type) {
         case 'rectangle': return hitRectangle(el, px, py);
@@ -23,6 +17,7 @@ export function hitTest(
         case 'line':
         case 'arrow':     return hitLine(el, px, py);
         case 'freedraw':  return hitFreedraw(el, px, py);
+        case 'text':      return hitText(el, px, py);
     }
 }
 
@@ -51,37 +46,31 @@ function hitEllipse(el: ExcalidrawElement, px: number, py: number): boolean {
 }
 
 function hitLine(el: ExcalidrawElement, px: number, py: number): boolean {
-    const x1 = el.x, y1 = el.y;
-    const x2 = el.x + el.width, y2 = el.y + el.height;
-    return pointToSegmentDistance(px, py, x1, y1, x2, y2) < THRESHOLD;
+    return pointToSegmentDistance(px, py, el.x, el.y, el.x + el.width, el.y + el.height) < THRESHOLD;
 }
 
-// Week 1：freedraw 命中判定
 function hitFreedraw(el: ExcalidrawFreedrawElement, px: number, py: number): boolean {
     const pts = el.points;
     if (pts.length < 2) return false;
-    // strokeWidth 越粗，命中阈值越宽松
     const threshold = Math.max(THRESHOLD, el.strokeWidth * 2);
     for (let i = 1; i < pts.length; i++) {
         const [ax, ay] = pts[i - 1];
         const [bx, by] = pts[i];
         const d = pointToSegmentDistance(
-            px, py,
-            el.x + ax, el.y + ay,
-            el.x + bx, el.y + by,
+            px, py, el.x + ax, el.y + ay, el.x + bx, el.y + by,
         );
         if (d < threshold) return true;
     }
     return false;
 }
 
+// ✅ Week 2：text 命中 = AABB 内即可
+function hitText(el: ExcalidrawTextElement, px: number, py: number): boolean {
+    return px >= el.x && px <= el.x + el.width && py >= el.y && py <= el.height;
+}
+
 export function pointToSegmentDistance(
-    px: number,
-    py: number,
-    x1: number,
-    y1: number,
-    x2: number,
-    y2: number,
+    px: number, py: number, x1: number, y1: number, x2: number, y2: number,
 ): number {
     const dx = x2 - x1;
     const dy = y2 - y1;
@@ -94,7 +83,6 @@ export function pointToSegmentDistance(
     return Math.hypot(px - projX, py - projY);
 }
 
-// 框选依旧使用 AABB。旋转元素/freedraw 用外接矩形近似，Week 4 换 R-tree 精确判定
 export function hitMarquee(
     el: ExcalidrawElement,
     m: { x: number; y: number; width: number; height: number },

@@ -1,43 +1,30 @@
 import type { RoughCanvas } from 'roughjs/bin/canvas';
 import type { Options } from 'roughjs/bin/core';
-import type { ExcalidrawElement, ExcalidrawFreedrawElement } from '@/element/types';
+import type { ExcalidrawElement, ExcalidrawFreedrawElement, ExcalidrawTextElement } from '@/element/types';
 
 export function renderElement(
-    ctx: CanvasRenderingContext2D,
-    rc: RoughCanvas,
-    el: ExcalidrawElement,
+    ctx: CanvasRenderingContext2D, rc: RoughCanvas, el: ExcalidrawElement,
 ) {
     ctx.save();
-
-    // 围绕元素中心旋转画布坐标系
     if (el.angle) {
         const cx = el.x + el.width / 2;
         const cy = el.y + el.height / 2;
-        ctx.translate(cx, cy);
-        ctx.rotate(el.angle);
-        ctx.translate(-cx, -cy);
+        ctx.translate(cx, cy); ctx.rotate(el.angle); ctx.translate(-cx, -cy);
     }
-
     const opts: Options = {
-        seed: el.seed,
-        stroke: el.strokeColor,
-        strokeWidth: el.strokeWidth,
+        seed: el.seed, stroke: el.strokeColor, strokeWidth: el.strokeWidth,
         roughness: el.roughness,
         fill: el.backgroundColor !== 'transparent' ? el.backgroundColor : undefined,
-        fillStyle: 'hachure',
-        hachureGap: 6,
-        hachureAngle: -41,
-        disableMultiStroke: false,
+        fillStyle: 'hachure', hachureGap: 6, hachureAngle: -41, disableMultiStroke: false,
     };
-
     switch (el.type) {
         case 'rectangle': renderRectangle(rc, el, opts); break;
         case 'ellipse':   renderEllipse(rc, el, opts); break;
         case 'line':      renderLine(rc, el, opts); break;
         case 'arrow':     renderArrow(rc, el, opts); break;
-        case 'freedraw':  renderFreedraw(ctx, el); break; // Week 1
+        case 'freedraw':  renderFreedraw(ctx, el); break;
+        case 'text':      renderText(ctx, el); break; // ✅ Week 2
     }
-
     ctx.restore();
 }
 
@@ -60,38 +47,20 @@ function renderEllipse(rc: RoughCanvas, el: ExcalidrawElement, opts: Options) {
 }
 
 function renderLine(rc: RoughCanvas, el: ExcalidrawElement, opts: Options) {
-    const x1 = el.x;
-    const y1 = el.y;
-    const x2 = el.x + el.width;
-    const y2 = el.y + el.height;
-    rc.line(x1, y1, x2, y2, opts);
+    rc.line(el.x, el.y, el.x + el.width, el.y + el.height, opts);
 }
 
 function renderArrow(rc: RoughCanvas, el: ExcalidrawElement, opts: Options) {
-    const x1 = el.x;
-    const y1 = el.y;
-    const x2 = el.x + el.width;
-    const y2 = el.y + el.height;
+    const x1 = el.x, y1 = el.y, x2 = el.x + el.width, y2 = el.y + el.height;
     rc.line(x1, y1, x2, y2, opts);
-
     const angle = Math.atan2(y2 - y1, x2 - x1);
-    const headLen = 14;
-    const headAngle = Math.PI / 6;
-    const hx1 = x2 - headLen * Math.cos(angle - headAngle);
-    const hy1 = y2 - headLen * Math.sin(angle - headAngle);
-    const hx2 = x2 - headLen * Math.cos(angle + headAngle);
-    const hy2 = y2 - headLen * Math.sin(angle + headAngle);
-    rc.line(x2, y2, hx1, hy1, opts);
-    rc.line(x2, y2, hx2, hy2, opts);
+    const headLen = 14, headAngle = Math.PI / 6;
+    rc.line(x2, y2, x2 - headLen * Math.cos(angle - headAngle), y2 - headLen * Math.sin(angle - headAngle), opts);
+    rc.line(x2, y2, x2 - headLen * Math.cos(angle + headAngle), y2 - headLen * Math.sin(angle + headAngle), opts);
 }
 
-/**
- * Week 1：freedraw 原生折线渲染（Week 5 换 perfect-freehand + Path2D 缓存）
- * 手绘不走 rough，避免抖动破坏笔迹形状。
- */
 function renderFreedraw(ctx: CanvasRenderingContext2D, el: ExcalidrawFreedrawElement) {
     if (el.points.length < 2) {
-        // 只有一个点：画个圆点做占位
         if (el.points.length === 1) {
             ctx.save();
             ctx.fillStyle = el.strokeColor;
@@ -105,8 +74,7 @@ function renderFreedraw(ctx: CanvasRenderingContext2D, el: ExcalidrawFreedrawEle
     ctx.save();
     ctx.strokeStyle = el.strokeColor;
     ctx.lineWidth = el.strokeWidth;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.beginPath();
     ctx.moveTo(el.x + el.points[0][0], el.y + el.points[0][1]);
     for (let i = 1; i < el.points.length; i++) {
@@ -114,4 +82,40 @@ function renderFreedraw(ctx: CanvasRenderingContext2D, el: ExcalidrawFreedrawEle
     }
     ctx.stroke();
     ctx.restore();
+}
+
+// ✅ Week 2：多行 text 渲染
+function renderText(ctx: CanvasRenderingContext2D, el: ExcalidrawTextElement) {
+    if (!el.text) return;
+    ctx.save();
+    ctx.font = `${el.fontSize}px ${el.fontFamily}`;
+    ctx.fillStyle = el.strokeColor;
+    ctx.textAlign = el.textAlign;
+    ctx.textBaseline = 'alphabetic';
+    const lines = el.text.split('\n');
+    const lineHeight = el.fontSize * 1.25;
+    let xAnchor = el.x;
+    if (el.textAlign === 'center') xAnchor = el.x + el.width / 2;
+    else if (el.textAlign === 'right') xAnchor = el.x + el.width;
+    for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], xAnchor, el.y + el.baseline + i * lineHeight);
+    }
+    ctx.restore();
+}
+
+// ✅ Week 2：静态方法，用于 TextEditor blur 时算尺寸
+export function measureText(
+    text: string, fontSize: number, fontFamily: string,
+): { width: number; height: number } {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = `${fontSize}px ${fontFamily}`;
+    const lines = text.split('\n');
+    let maxW = 0;
+    for (const line of lines) {
+        const w = ctx.measureText(line).width;
+        if (w > maxW) maxW = w;
+    }
+    const lineHeight = fontSize * 1.25;
+    return { width: Math.max(1, maxW), height: Math.max(fontSize, lines.length * lineHeight) };
 }

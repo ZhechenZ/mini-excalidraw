@@ -1,0 +1,17 @@
+.text-editor {
+  position: fixed;
+  background: transparent;
+  border: 1px dashed #1971c2;
+  outline: none;
+  padding: 2px 4px;
+  margin: 0;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.25;
+  white-space: pre;
+  z-index: 30;
+  min-width: 40px;
+  min-height: 1.25em;
+  box-sizing: content-box;
+  pointer-events: auto;
+}
