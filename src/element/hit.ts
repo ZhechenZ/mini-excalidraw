@@ -3,6 +3,8 @@ import { getElementBounds } from './bounds';
 import { rotatePoint } from './rotate';
 
 const THRESHOLD = 6;
+// ✅ text 点击容差：往外扩一圈，让细字体也好点
+const TEXT_HIT_PADDING = 4;
 
 export function hitTest(el: ExcalidrawElement, px: number, py: number): boolean {
     if (el.angle) {
@@ -64,9 +66,16 @@ function hitFreedraw(el: ExcalidrawFreedrawElement, px: number, py: number): boo
     return false;
 }
 
-// ✅ Week 2：text 命中 = AABB 内即可
+// ✅ Week 2：text 命中 = 元素 AABB + 外扩 TEXT_HIT_PADDING
+// 修复原来 py <= el.height 的严重 bug（应为 py <= el.y + el.height）
 function hitText(el: ExcalidrawTextElement, px: number, py: number): boolean {
-    return px >= el.x && px <= el.x + el.width && py >= el.y && py <= el.height;
+    const pad = TEXT_HIT_PADDING;
+    return (
+        px >= el.x - pad &&
+        px <= el.x + el.width + pad &&
+        py >= el.y - pad &&
+        py <= el.y + el.height + pad
+    );
 }
 
 export function pointToSegmentDistance(

@@ -197,6 +197,17 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     }
 
     if (tool === 'selection') {
+      // ✅ 双击文字：优先进入编辑（不受选中状态和 transform handle 干扰）
+      if (e.detail === 2) {
+        const hitDbl = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
+        if (hitDbl && hitDbl.type === 'text') {
+          interactionRef.current = { type: 'text-edit', element: hitDbl as ExcalidrawTextElement, isNew: false };
+          onAppStateChange({ selectedElementIds: { [hitDbl.id]: true } });
+          invalidate();
+          return;
+        }
+      }
+
       const selected = elements.filter(el => appState.selectedElementIds[el.id]);
 
       if (selected.length > 0) {
@@ -227,12 +238,6 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
 
       const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
       if (hit) {
-        // ✅ Week 2：双击 text 元素 = 进入编辑
-        if (e.detail === 2 && hit.type === 'text') {
-          interactionRef.current = { type: 'text-edit', element: hit as ExcalidrawTextElement, isNew: false };
-          invalidate(); return;
-        }
-
         // ✅ Week 2：group 展开
         const groupExpanded = expandSelectionToGroup(elements, hit.id);
         let nextIds = { ...appState.selectedElementIds };
