@@ -197,17 +197,6 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     }
 
     if (tool === 'selection') {
-      // ✅ 双击文字：优先进入编辑（不受选中状态和 transform handle 干扰）
-      if (e.detail === 2) {
-        const hitDbl = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
-        if (hitDbl && hitDbl.type === 'text') {
-          interactionRef.current = { type: 'text-edit', element: hitDbl as ExcalidrawTextElement, isNew: false };
-          onAppStateChange({ selectedElementIds: { [hitDbl.id]: true } });
-          invalidate();
-          return;
-        }
-      }
-
       const selected = elements.filter(el => appState.selectedElementIds[el.id]);
 
       if (selected.length > 0) {
@@ -382,6 +371,24 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     }
   };
 
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if (appState.currentTool !== 'selection') return;
+    // 已经在编辑就别重复触发
+    if (interactionRef.current.type === 'text-edit') return;
+    const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
+    const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
+    if (hit && hit.type === 'text') {
+      // 若刚被 pointerdown 设成了 move，取消掉
+      interactionRef.current = {
+        type: 'text-edit',
+        element: hit as ExcalidrawTextElement,
+        isNew: false,
+      };
+      onAppStateChange({ selectedElementIds: { [hit.id]: true } });
+      invalidate();
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     // ✅ 输入元素放行
     const t = e.target as HTMLElement | null;
@@ -406,6 +413,7 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onDoubleClick={onDoubleClick}
         onWheel={onWheel}
         onKeyDown={onKeyDown}
         tabIndex={-1}
