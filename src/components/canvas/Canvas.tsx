@@ -4,7 +4,7 @@ import type { AppState } from '@/state/appState';
 import type { Bounds } from '@/element/bounds';
 import { MAX_ZOOM, MIN_ZOOM } from '@/constants';
 import { screenToCanvas } from '@/utils/viewport';
-import { renderScene } from '@/renderer/renderScene';
+import { renderStaticLayer, renderOverlayLayer } from '@/renderer/renderScene';
 import {
   newElementByTool, mutateElementEnd, normalizeElement, pushFreedrawPoint,
   newTextElement, mutateText, type DrawableTool,
@@ -31,18 +31,38 @@ interface CanvasProps {
 
 const DRAWABLE_TOOLS: readonly DrawableTool[] = ['rectangle', 'ellipse', 'line', 'arrow', 'freedraw'];
 
+// ⭐ Week 1：交互期间不再调用 setElements。
+// move/resize/rotate 都把"进行中的偏移量"记在 interactionRef 里，
+// 覆盖层根据 originals + 偏移量实时渲染；静态层完全不动。
 type Interaction =
   | { type: 'idle' }
   | { type: 'pan'; startX: number; startY: number; scrollX: number; scrollY: number }
   | { type: 'draft'; element: ExcalidrawElement }
-  | { type: 'move'; startX: number; startY: number; originals: Record<string, ExcalidrawElement>; hasDragged: boolean }
+  | {
+      type: 'move';
+      startX: number; startY: number;
+      dx: number; dy: number;
+      originals: Record<string, ExcalidrawElement>;
+      hasDragged: boolean;
+    }
   | { type: 'marquee'; startX: number; startY: number }
   | {
-    type: 'resize'; handle: Exclude<HandleDirection, 'rotate'>; originalBounds: Bounds;
-    originals: Record<string, ExcalidrawElement>; startAngle: number;
-    startCenter: { cx: number; cy: number }; hasDragged: boolean;
-  }
-  | { type: 'rotate'; elementId: string; original: ExcalidrawElement; center: { cx: number; cy: number }; hasDragged: boolean }
+      type: 'resize';
+      handle: Exclude<HandleDirection, 'rotate'>;
+      originalBounds: Bounds;
+      newBounds: Bounds;
+      originals: Record<string, ExcalidrawElement>;
+      startAngle: number;
+      startCenter: { cx: number; cy: number };
+      hasDragged: boolean;
+    }
+  | {
+      type: 'rotate';
+      elementId: string; original: ExcalidrawElement;
+      center: { cx: number; cy: number };
+      currentAngle: number;
+      hasDragged: boolean;
+    }
   | { type: 'text-edit'; element: ExcalidrawTextElement; isNew: boolean };
 
 function toolToCursor(tool: string, isSpaceDown: boolean, i: Interaction, h: HandleDirection | null) {
@@ -65,24 +85,77 @@ function toLocal(p: { x: number; y: number }, selected: ExcalidrawElement[]) {
   return p;
 }
 
+// 计算当前正在交互中的元素（应用 dx/dy/newBounds/currentAngle 后的样子）
+function computeInteractiveElements(
+  elements: ExcalidrawElement[],
+  inter: Interaction,
+): ExcalidrawElement[] {
+  if (inter.type === 'draft') return [inter.element];
+  if (inter.type === 'move') {
+    return Object.keys(inter.originals).map(id =>
+      translateElement(inter.originals[id], inter.dx, inter.dy),
+    );
+  }
+  if (inter.type === 'resize') {
+    return Object.keys(inter.originals).map(id =>
+      resizeElementByBounds(inter.originals[id], inter.originalBounds, inter.newBounds),
+    );
+  }
+  if (inter.type === 'rotate') {
+    return [setElementAngle(inter.original, inter.currentAngle)];
+  }
+  if (inter.type === 'text-edit' && !inter.isNew) {
+    // text-edit 时元素在 TextEditor 里显示，画布上不画
+    return [];
+  }
+  return [];
+}
+
+// 返回哪些元素应该被"静态层"排除（因为它们正在被交互）
+function getInteractingIds(inter: Interaction): Set<string> {
+  const s = new Set<string>();
+  if (inter.type === 'move' || inter.type === 'resize') {
+    Object.keys(inter.originals).forEach(id => s.add(id));
+  } else if (inter.type === 'rotate') {
+    s.add(inter.elementId);
+  } else if (inter.type === 'text-edit' && !inter.isNew) {
+    s.add(inter.element.id);
+  }
+  return s;
+}
+
 export function Canvas({ elements, setElements, appState, onAppStateChange, commitHistory }: CanvasProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // ⭐ Week 1：两层 canvas
+  const staticCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+
   const [dpr, setDpr] = useState(window.devicePixelRatio || 1);
   const [isSpaceDown, setIsSpaceDown] = useState(false);
   const [hoveredHandle, setHoveredHandle] = useState<HandleDirection | null>(null);
   const interactionRef = useRef<Interaction>({ type: 'idle' });
-  const [tick, setTick] = useState(0);
-  const invalidate = useCallback(() => setTick(t => t + 1), []);
 
+  // 两个 tick：静态层只在必要时 +1，覆盖层每次交互 +1
+  const [overlayTick, setOverlayTick] = useState(0);
+  const [staticTick, setStaticTick] = useState(0);
+  const invalidateOverlay = useCallback(() => setOverlayTick(t => t + 1), []);
+  const invalidateStatic = useCallback(() => setStaticTick(t => t + 1), []);
+  const invalidateAll = useCallback(() => {
+    setOverlayTick(t => t + 1);
+    setStaticTick(t => t + 1);
+  }, []);
+
+  // resize 两层 canvas 尺寸
   useEffect(() => {
-    const canvas = canvasRef.current; if (!canvas) return;
     const resize = () => {
       const d = window.devicePixelRatio || 1;
       setDpr(d);
-      canvas.width = window.innerWidth * d;
-      canvas.height = window.innerHeight * d;
-      canvas.style.width = `${window.innerWidth}px`;
-      canvas.style.height = `${window.innerHeight}px`;
+      for (const c of [staticCanvasRef.current, overlayCanvasRef.current]) {
+        if (!c) continue;
+        c.width = window.innerWidth * d;
+        c.height = window.innerHeight * d;
+        c.style.width = `${window.innerWidth}px`;
+        c.style.height = `${window.innerHeight}px`;
+      }
     };
     resize();
     window.addEventListener('resize', resize);
@@ -91,7 +164,6 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      // ✅ 编辑 text 时不要触发 Space pan
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if (e.code === 'Space') setIsSpaceDown(true);
@@ -102,17 +174,40 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
   }, []);
 
+  // ⭐ 静态层：只画不在交互中的元素。依赖 elements + viewport + staticTick。
   useEffect(() => {
-    const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const canvas = staticCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const interactingIds = getInteractingIds(interactionRef.current);
+    const staticEls = interactingIds.size
+      ? elements.filter(el => !interactingIds.has(el.id))
+      : elements;
+    renderStaticLayer({ canvas, ctx, elements: staticEls, appState, dpr });
+  }, [elements, appState.zoom, appState.scrollX, appState.scrollY, dpr, staticTick]);
+
+  // ⭐ 覆盖层：画正在交互的元素 + 选中框 + marquee。每 tick 都重画（内容极少）。
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     const inter = interactionRef.current;
-    let list = elements;
-    if (inter.type === 'draft') list = [...elements, inter.element];
-    if (inter.type === 'text-edit' && !inter.isNew) {
-      list = elements.filter(el => el.id !== inter.element.id);
-    }
-    renderScene({ canvas, ctx, elements: list, appState, dpr });
-  }, [elements, appState, dpr, tick]);
+    const interactive = computeInteractiveElements(elements, inter);
+    // 选中框应该跟随交互位置，所以用 static + interactive 合起来算 selected
+    const interactingIds = getInteractingIds(inter);
+    const staticSelected = elements.filter(
+      el => appState.selectedElementIds[el.id] && !interactingIds.has(el.id),
+    );
+    const displaySelected = [...staticSelected, ...interactive.filter(el => appState.selectedElementIds[el.id])];
+    renderOverlayLayer({
+      canvas, ctx, appState, dpr,
+      interactiveElements: interactive,
+      displaySelected,
+      marquee: appState.marquee,
+    });
+  }, [elements, appState, dpr, overlayTick]);
 
   const onWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -140,7 +235,7 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
       setElements(next);
       onAppStateChange({ selectedElementIds: {} });
       commitHistory(next, {});
-      invalidate();
+      invalidateAll();
       return;
     }
 
@@ -153,7 +248,7 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     setElements(nextElements);
     onAppStateChange({ currentTool: 'selection', selectedElementIds: nextSel });
     commitHistory(nextElements, nextSel);
-    invalidate();
+    invalidateAll();
   };
 
   const cancelTextEdit = () => {
@@ -161,11 +256,10 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     if (inter.type !== 'text-edit') return;
     interactionRef.current = { type: 'idle' };
     if (inter.isNew) return;
-    invalidate();
+    invalidateAll();
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    // 编辑 text 时依赖 textarea 的 onBlur 完成提交，canvas 不参与本次交互
     if (interactionRef.current.type === 'text-edit') return;
 
     const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
@@ -176,24 +270,23 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
         type: 'pan', startX: e.clientX, startY: e.clientY,
         scrollX: appState.scrollX, scrollY: appState.scrollY,
       };
-      invalidate(); return;
+      invalidateOverlay(); return;
     }
     if (e.button !== 0) return;
 
     const tool = appState.currentTool;
 
-    // ✅ Week 2：text 工具点击生成 textarea
     if (tool === 'text') {
       const el = newTextElement({ x: p.x, y: p.y, strokeColor: '#1e1e1e' });
       interactionRef.current = { type: 'text-edit', element: el, isNew: true };
-      invalidate();
+      invalidateOverlay();
       return;
     }
 
     if ((DRAWABLE_TOOLS as readonly string[]).includes(tool)) {
       const el = newElementByTool(tool as DrawableTool, { x: p.x, y: p.y }, { roughness: appState.currentRoughness });
       interactionRef.current = { type: 'draft', element: el };
-      invalidate(); return;
+      invalidateOverlay(); return;
     }
 
     if (tool === 'selection') {
@@ -207,9 +300,10 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
           const el = selected[0];
           interactionRef.current = {
             type: 'rotate', elementId: el.id, original: el,
-            center: { cx: el.x + el.width / 2, cy: el.y + el.height / 2 }, hasDragged: false,
+            center: { cx: el.x + el.width / 2, cy: el.y + el.height / 2 },
+            currentAngle: el.angle, hasDragged: false,
           };
-          invalidate(); return;
+          invalidateStatic(); invalidateOverlay(); return;
         }
         if (handle && handle !== 'rotate') {
           const originalBounds = getCommonBounds(selected);
@@ -218,16 +312,15 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
           const startAngle = selected.length === 1 ? selected[0].angle : 0;
           const startCenter = { cx: (originalBounds.x1 + originalBounds.x2) / 2, cy: (originalBounds.y1 + originalBounds.y2) / 2 };
           interactionRef.current = {
-            type: 'resize', handle, originalBounds, originals,
+            type: 'resize', handle, originalBounds, newBounds: originalBounds, originals,
             startAngle, startCenter, hasDragged: false,
           };
-          invalidate(); return;
+          invalidateStatic(); invalidateOverlay(); return;
         }
       }
 
       const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
       if (hit) {
-        // ✅ Week 2：group 展开
         const groupExpanded = expandSelectionToGroup(elements, hit.id);
         let nextIds = { ...appState.selectedElementIds };
         const isSelected = !!nextIds[hit.id];
@@ -240,13 +333,30 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
         onAppStateChange({ selectedElementIds: nextIds });
         const originals: Record<string, ExcalidrawElement> = {};
         for (const el of elements) if (nextIds[el.id]) originals[el.id] = el;
-        interactionRef.current = { type: 'move', startX: p.x, startY: p.y, originals, hasDragged: false };
-        invalidate(); return;
+        interactionRef.current = {
+          type: 'move', startX: p.x, startY: p.y, dx: 0, dy: 0,
+          originals, hasDragged: false,
+        };
+        invalidateStatic(); invalidateOverlay(); return;
       }
 
       if (!e.shiftKey) onAppStateChange({ selectedElementIds: {} });
       interactionRef.current = { type: 'marquee', startX: p.x, startY: p.y };
-      invalidate(); return;
+      invalidateOverlay(); return;
+    }
+  };
+
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if (appState.currentTool !== 'selection') return;
+    if (interactionRef.current.type === 'text-edit') return;
+    const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
+    const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
+    if (hit && hit.type === 'text') {
+      interactionRef.current = {
+        type: 'text-edit', element: hit as ExcalidrawTextElement, isNew: false,
+      };
+      onAppStateChange({ selectedElementIds: { [hit.id]: true } });
+      invalidateAll();
     }
   };
 
@@ -275,13 +385,14 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
       } else {
         interactionRef.current = { ...inter, element: mutateElementEnd(inter.element, p.x, p.y) };
       }
-      invalidate(); return;
+      invalidateOverlay(); return;
     }
+    // ⭐ move/resize/rotate 只更新 interactionRef，不 setElements
     if (inter.type === 'move') {
       const dx = p.x - inter.startX, dy = p.y - inter.startY;
       if (dx !== 0 || dy !== 0) inter.hasDragged = true;
-      setElements(prev => prev.map(el => inter.originals[el.id] ? translateElement(inter.originals[el.id], dx, dy) : el));
-      return;
+      inter.dx = dx; inter.dy = dy;
+      invalidateOverlay(); return;
     }
     if (inter.type === 'marquee') {
       onAppStateChange({ marquee: { x: inter.startX, y: inter.startY, width: p.x - inter.startX, height: p.y - inter.startY } });
@@ -294,16 +405,16 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
       const newBounds = computeNewBounds(inter.handle, inter.originalBounds, local.x, local.y, e.shiftKey);
       const ob = inter.originalBounds;
       if (newBounds.x1 !== ob.x1 || newBounds.y1 !== ob.y1 || newBounds.x2 !== ob.x2 || newBounds.y2 !== ob.y2) inter.hasDragged = true;
-      setElements(prev => prev.map(el => inter.originals[el.id] ? resizeElementByBounds(inter.originals[el.id], inter.originalBounds, newBounds) : el));
-      return;
+      inter.newBounds = newBounds;
+      invalidateOverlay(); return;
     }
     if (inter.type === 'rotate') {
       let angle = angleFromPointer(p.x, p.y, inter.center.cx, inter.center.cy);
       if (e.shiftKey) angle = snapAngle(angle);
       angle = normalizeAngle(angle);
       if (angle !== inter.original.angle) inter.hasDragged = true;
-      setElements(prev => prev.map(el => el.id === inter.elementId ? setElementAngle(inter.original, angle) : el));
-      return;
+      inter.currentAngle = angle;
+      invalidateOverlay(); return;
     }
   };
 
@@ -312,13 +423,16 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     const inter = interactionRef.current;
     const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
 
-    if (inter.type === 'pan') { interactionRef.current = { type: 'idle' }; invalidate(); return; }
+    if (inter.type === 'pan') {
+      interactionRef.current = { type: 'idle' };
+      invalidateOverlay(); return;
+    }
     if (inter.type === 'draft') {
       const draft = normalizeElement(inter.element);
       interactionRef.current = { type: 'idle' };
       if (draft.type === 'freedraw') {
-        if (draft.points.length < 2) { invalidate(); return; }
-      } else if (Math.abs(draft.width) < 2 && Math.abs(draft.height) < 2) { invalidate(); return; }
+        if (draft.points.length < 2) { invalidateAll(); return; }
+      } else if (Math.abs(draft.width) < 2 && Math.abs(draft.height) < 2) { invalidateAll(); return; }
       const nextElements = [...elements, draft];
       const nextSel = { [draft.id]: true } as Record<string, true>;
       setElements(nextElements);
@@ -327,10 +441,12 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
       return;
     }
     if (inter.type === 'move') {
-      interactionRef.current = { type: 'idle' };
-      if (!inter.hasDragged) return;
+      const originals = inter.originals;
+      const hasDragged = inter.hasDragged;
       const dx = p.x - inter.startX, dy = p.y - inter.startY;
-      const nextElements = elements.map(el => inter.originals[el.id] ? translateElement(inter.originals[el.id], dx, dy) : el);
+      interactionRef.current = { type: 'idle' };
+      if (!hasDragged) { invalidateAll(); return; }
+      const nextElements = elements.map(el => originals[el.id] ? translateElement(originals[el.id], dx, dy) : el);
       setElements(nextElements);
       commitHistory(nextElements, appState.selectedElementIds);
       return;
@@ -343,61 +459,48 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
         onAppStateChange({ selectedElementIds: nextIds, marquee: null });
       } else onAppStateChange({ marquee: null });
       interactionRef.current = { type: 'idle' };
-      invalidate(); return;
+      invalidateOverlay(); return;
     }
     if (inter.type === 'resize') {
+      const originals = inter.originals;
+      const originalBounds = inter.originalBounds;
+      const startAngle = inter.startAngle;
+      const startCenter = inter.startCenter;
+      const handle = inter.handle;
+      const hasDragged = inter.hasDragged;
       interactionRef.current = { type: 'idle' };
-      invalidate();
-      if (!inter.hasDragged) return;
-      const local = inter.startAngle
-        ? rotatePoint(p.x, p.y, inter.startCenter.cx, inter.startCenter.cy, -inter.startAngle)
+      if (!hasDragged) { invalidateAll(); return; }
+      const local = startAngle
+        ? rotatePoint(p.x, p.y, startCenter.cx, startCenter.cy, -startAngle)
         : { x: p.x, y: p.y };
-      const newBounds = computeNewBounds(inter.handle, inter.originalBounds, local.x, local.y, e.shiftKey);
-      const nextElements = elements.map(el => inter.originals[el.id] ? resizeElementByBounds(inter.originals[el.id], inter.originalBounds, newBounds) : el);
+      const newBounds = computeNewBounds(handle, originalBounds, local.x, local.y, e.shiftKey);
+      const nextElements = elements.map(el => originals[el.id] ? resizeElementByBounds(originals[el.id], originalBounds, newBounds) : el);
       setElements(nextElements);
       commitHistory(nextElements, appState.selectedElementIds);
       return;
     }
     if (inter.type === 'rotate') {
+      const original = inter.original;
+      const elementId = inter.elementId;
+      const center = inter.center;
+      const hasDragged = inter.hasDragged;
       interactionRef.current = { type: 'idle' };
-      invalidate();
-      if (!inter.hasDragged) return;
-      let angle = angleFromPointer(p.x, p.y, inter.center.cx, inter.center.cy);
+      if (!hasDragged) { invalidateAll(); return; }
+      let angle = angleFromPointer(p.x, p.y, center.cx, center.cy);
       if (e.shiftKey) angle = snapAngle(angle);
       angle = normalizeAngle(angle);
-      const nextElements = elements.map(el => el.id === inter.elementId ? setElementAngle(inter.original, angle) : el);
+      const nextElements = elements.map(el => el.id === elementId ? setElementAngle(original, angle) : el);
       setElements(nextElements);
       commitHistory(nextElements, appState.selectedElementIds);
     }
   };
 
-  const onDoubleClick = (e: React.MouseEvent) => {
-    if (appState.currentTool !== 'selection') return;
-    // 已经在编辑就别重复触发
-    if (interactionRef.current.type === 'text-edit') return;
-    const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
-    const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
-    if (hit && hit.type === 'text') {
-      // 若刚被 pointerdown 设成了 move，取消掉
-      interactionRef.current = {
-        type: 'text-edit',
-        element: hit as ExcalidrawTextElement,
-        isNew: false,
-      };
-      onAppStateChange({ selectedElementIds: { [hit.id]: true } });
-      invalidate();
-    }
-  };
-
   const onKeyDown = (e: React.KeyboardEvent) => {
-    // ✅ 输入元素放行
     const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
-      return;
-    }
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (e.key === 'Escape' && interactionRef.current.type !== 'idle') {
       interactionRef.current = { type: 'idle' };
-      invalidate();
+      invalidateAll();
       e.preventDefault();
     }
   };
@@ -406,9 +509,13 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
   const cursor = toolToCursor(appState.currentTool, isSpaceDown, inter, hoveredHandle);
 
   return (
-    <>
+    <div className="canvas-stack" style={{ position: 'fixed', inset: 0 }}>
       <canvas
-        ref={canvasRef}
+        ref={staticCanvasRef}
+        style={{ position: 'absolute', top: 0, left: 0, display: 'block', pointerEvents: 'none' }}
+      />
+      <canvas
+        ref={overlayCanvasRef}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -417,7 +524,7 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
         onWheel={onWheel}
         onKeyDown={onKeyDown}
         tabIndex={-1}
-        style={{ display: 'block', cursor, touchAction: 'none' }}
+        style={{ position: 'absolute', top: 0, left: 0, display: 'block', cursor, touchAction: 'none' }}
       />
       {inter.type === 'text-edit' && (
         <TextEditor
@@ -434,6 +541,6 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
           onCancel={cancelTextEdit}
         />
       )}
-    </>
+    </div>
   );
 }

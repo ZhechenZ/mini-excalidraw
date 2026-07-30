@@ -10,6 +10,8 @@ import { TOOLS, type Tool } from '@/constants';
 import { bringToFront, sendToBack, bringForward, sendBackward } from '@/element/zindex';
 import { groupElements, ungroupElements } from '@/element/groups';
 import { copyToClipboard, readFromClipboard, preparePastedElements } from '@/element/clipboard';
+import { FpsMeter } from './components/dev/FpsMeter';
+import { readBenchCount, generateBenchElements } from './utils/bench';
 
 const TOOL_HOTKEYS: Record<string, Tool> = {
   '1': 'selection', '2': 'rectangle', '3': 'ellipse', '4': 'line',
@@ -170,6 +172,16 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  useEffect(() => {
+    const n = readBenchCount();
+    if (n > 0) {
+      const seeded = generateBenchElements(n);
+      setElements(seeded);
+      historyRef.current.push(seeded, {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const selected = elements.filter(el => appState.selectedElementIds[el.id]);
   return (
     <>
@@ -178,6 +190,7 @@ export default function App() {
         appState={appState} onAppStateChange={patchAppState}
         commitHistory={commitHistory}
       />
+      <FpsMeter />
       <Toolbar
         currentTool={appState.currentTool}
         onToolChange={t => patchAppState({ currentTool: t })}
