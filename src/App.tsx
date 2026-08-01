@@ -5,17 +5,19 @@ import { StatusBar } from '@/components/status-bar/StatusBar';
 import { PropertyPanel } from '@/components/tool-bar/PropertyPanel';
 import { createInitialAppState, type AppState } from '@/state/appState';
 import type { ExcalidrawElement } from '@/element/types';
-import { History } from '@/history/History';
 import { TOOLS, type Tool } from '@/constants';
 import { bringToFront, sendToBack, bringForward, sendBackward } from '@/element/zindex';
 import { groupElements, ungroupElements } from '@/element/groups';
 import { copyToClipboard, readFromClipboard, preparePastedElements } from '@/element/clipboard';
 import { FpsMeter } from './components/dev/FpsMeter';
 import { readBenchCount, generateBenchElements } from './utils/bench';
-// ⭐ Week 3：持久化 & 导出菜单
-import { loadScene } from '@/persistence/scene';
-import { useAutosave } from '@/persistence/useAutosave';
 import { AppMenu } from '@/components/menu/AppMenu';
+// ⭐ Week 4：CRDT 数据层（Yjs + y-indexeddb）
+import { useYSceneDoc } from '@/collab/useYSceneDoc';
+
+// ⭐ Week 4：CRDT 总开关。true = 走 Yjs + y-indexeddb（本周默认）；
+// false = 回退到 Week 3 的 useState + useAutosave 降级路径（此文件按 CRDT 模式实现）。
+const USE_CRDT = true;
 
 const TOOL_HOTKEYS: Record<string, Tool> = {
   '1': 'selection', '2': 'rectangle', '3': 'ellipse', '4': 'line',
@@ -26,34 +28,46 @@ const TOOL_HOTKEYS: Record<string, Tool> = {
 const randomInteger = () => Math.floor(Math.random() * 2 ** 31);
 
 export default function App() {
+  // appState 仍用普通 useState 管理完整交互态（cursor / 选区 / 框选等不进 CRDT）。
   const [appState, setAppState] = useState<AppState>(createInitialAppState);
-  const [elements, setElements] = useState<ExcalidrawElement[]>([]);
-  const historyRef = useRef(new History());
-  // ⭐ Week 3：初始加载完成前不允许 autosave，防止刚起来就把空场景覆盖掉磁盘上的旧场景
-  const [hydrated, setHydrated] = useState(false);
+
+  // ⭐ Week 4：elements / undo / redo / 落盘全部由 CRDT 层接管。
+  // setElements 与 React.Dispatch<SetStateAction> 完全兼容，Canvas 无需任何改动。
+  const y = useYSceneDoc({ enabled: USE_CRDT });
+  const elements = y.elements;
+  const setElements = y.setElements;
 
   const elementsRef = useRef(elements);
   const selectedIdsRef = useRef(appState.selectedElementIds);
   useEffect(() => { elementsRef.current = elements; }, [elements]);
   useEffect(() => { selectedIdsRef.current = appState.selectedElementIds; }, [appState.selectedElementIds]);
-  useEffect(() => { historyRef.current.push([], {}); }, []);
 
-  const patchAppState = (patch: Partial<AppState>) =>
+  // ⭐ Week 4：Y.Doc 里 appState 子集变化（加载 / 迁移 / 未来的远端）时，合并回完整 AppState。
+  useEffect(() => {
+    setAppState(prev => ({ ...prev, ...y.persistedAppState }));
+  }, [y.persistedAppState]);
+
+  // patchAppState 现在同时负责：更新本地 UI 态 + 把持久化子集写进 Y.Doc。
+  const patchAppState = (patch: Partial<AppState>) => {
     setAppState(prev => ({ ...prev, ...patch }));
-
-  const commitHistory = (nextElements?: readonly ExcalidrawElement[], nextSelected?: Record<string, true>) => {
-    historyRef.current.push(nextElements ?? elementsRef.current, nextSelected ?? selectedIdsRef.current);
+    y.updateAppState(patch);
   };
+
+  // ⭐ Week 4：撤销边界 = Y.transact 边界，由 UndoManager 自动管理。
+  // commitHistory 保留签名以兼容 Canvas 调用，但不再需要手动提交历史。
+  const commitHistory = (
+    _nextElements?: readonly ExcalidrawElement[],
+    _nextSelected?: Record<string, true>,
+  ) => { /* no-op：一次 setElements 的 transact 即为一步撤销 */ };
 
   const undo = () => {
-    const s = historyRef.current.undo(); if (!s) return;
-    setElements([...s.elements]);
-    patchAppState({ selectedElementIds: { ...s.selectedElementIds }, marquee: null });
+    y.undo();
+    // 撤销后选区可能指向已删元素，清掉更干净（选区不进 CRDT，故直接本地清）。
+    setAppState(prev => ({ ...prev, selectedElementIds: {}, marquee: null }));
   };
   const redo = () => {
-    const s = historyRef.current.redo(); if (!s) return;
-    setElements([...s.elements]);
-    patchAppState({ selectedElementIds: { ...s.selectedElementIds }, marquee: null });
+    y.redo();
+    setAppState(prev => ({ ...prev, selectedElementIds: {}, marquee: null }));
   };
 
   const patchSelected = (patch: Partial<ExcalidrawElement>) => {
@@ -65,30 +79,23 @@ export default function App() {
         : el,
     );
     setElements(next);
-    commitHistory(next, sel);
   };
 
   const applyZOrder = (fn: (arr: ExcalidrawElement[], ids: Record<string, true>) => ExcalidrawElement[]) => {
     const sel = selectedIdsRef.current;
     if (Object.keys(sel).length === 0) return;
-    const next = fn(elementsRef.current, sel);
-    setElements(next);
-    commitHistory(next, sel);
+    setElements(fn(elementsRef.current, sel));
   };
 
   const doGroup = () => {
     const sel = selectedIdsRef.current;
     if (Object.keys(sel).length < 2) return;
-    const next = groupElements(elementsRef.current, sel);
-    setElements(next);
-    commitHistory(next, sel);
+    setElements(groupElements(elementsRef.current, sel));
   };
   const doUngroup = () => {
     const sel = selectedIdsRef.current;
     if (Object.keys(sel).length === 0) return;
-    const next = ungroupElements(elementsRef.current, sel);
-    setElements(next);
-    commitHistory(next, sel);
+    setElements(ungroupElements(elementsRef.current, sel));
   };
 
   const doCopy = () => {
@@ -105,7 +112,6 @@ export default function App() {
     for (const el of pasted) nextSel[el.id] = true;
     setElements(next);
     patchAppState({ selectedElementIds: nextSel });
-    commitHistory(next, nextSel);
   };
   const doDuplicate = () => {
     const sel = selectedIdsRef.current;
@@ -117,7 +123,6 @@ export default function App() {
     for (const el of pasted) nextSel[el.id] = true;
     setElements(next);
     patchAppState({ selectedElementIds: nextSel });
-    commitHistory(next, nextSel);
   };
 
   useEffect(() => {
@@ -135,7 +140,7 @@ export default function App() {
         if (!Object.keys(sel).length) return;
         const next = elementsRef.current.filter(el => !sel[el.id]);
         setElements(next); patchAppState({ selectedElementIds: {} });
-        commitHistory(next, {}); return;
+        return;
       }
       if (e.key === 'Escape') { patchAppState({ selectedElementIds: {}, marquee: null }); return; }
 
@@ -166,48 +171,29 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  // ⭐ Week 3：启动时先从 IndexedDB 加载场景；bench 优先级更高（压测用）
-  useEffect(() => {
-    const n = readBenchCount();
-    if (n > 0) {
-      const seeded = generateBenchElements(n);
-      setElements(seeded);
-      historyRef.current.push(seeded, {});
-      setHydrated(true);
-      return;
-    }
-    (async () => {
-      try {
-        const scene = await loadScene();
-        if (scene) {
-          setElements(scene.elements);
-          setAppState(prev => ({ ...prev, ...scene.appState }));
-          historyRef.current.push(scene.elements, {});
-        }
-      } catch (e) {
-        console.error('[hydrate] load failed', e);
-      } finally {
-        setHydrated(true);
-      }
-    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ⭐ Week 3：Autosave（500ms debounce）
-  const { status: saveStatus, flush } = useAutosave(elements, appState, hydrated, 500);
+  // ⭐ Week 4：场景加载改由 useYSceneDoc（whenSynced + 迁移）负责。
+  // 这里仅在 CRDT ready 且当前为空时处理 bench 压测数据（?bench=N），不覆盖已有场景。
+  useEffect(() => {
+    if (!USE_CRDT || !y.ready) return;
+    const n = readBenchCount();
+    if (n > 0 && elementsRef.current.length === 0) {
+      setElements(generateBenchElements(n));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [y.ready]);
 
-  // ⭐ Week 3：从 JSON 导入
+  // ⭐ Week 4：从 JSON 导入 —— 写进 Y.Doc（一步事务 = 一步撤销），并同步视口子集。
   const importScene = (file: { elements: ExcalidrawElement[]; appState: Partial<AppState> }) => {
     setElements(file.elements);
     setAppState(prev => ({ ...prev, ...file.appState, selectedElementIds: {}, marquee: null }));
-    historyRef.current.push(file.elements, {});
+    y.updateAppState(file.appState);
   };
   const clearAll = () => {
     setElements([]);
-    patchAppState({ selectedElementIds: {}, marquee: null });
-    historyRef.current.push([], {});
+    setAppState(prev => ({ ...prev, selectedElementIds: {}, marquee: null }));
   };
 
   const selected = elements.filter(el => appState.selectedElementIds[el.id]);
@@ -222,8 +208,8 @@ export default function App() {
       <AppMenu
         elements={elements}
         appState={appState}
-        saveStatus={saveStatus}
-        onFlush={flush}
+        saveStatus={y.saveStatus}
+        onFlush={y.flush}
         onImportScene={importScene}
         onClearScene={clearAll}
       />

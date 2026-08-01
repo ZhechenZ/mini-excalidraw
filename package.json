@@ -15,7 +15,9 @@
     "nanoid": "^6.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "roughjs": "^4.6.6"
+    "roughjs": "^4.6.6",
+    "y-indexeddb": "^9.0.12",
+    "yjs": "^13.6.31"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
