@@ -12,6 +12,10 @@ import { groupElements, ungroupElements } from '@/element/groups';
 import { copyToClipboard, readFromClipboard, preparePastedElements } from '@/element/clipboard';
 import { FpsMeter } from './components/dev/FpsMeter';
 import { readBenchCount, generateBenchElements } from './utils/bench';
+// ⭐ Week 3：持久化 & 导出菜单
+import { loadScene } from '@/persistence/scene';
+import { useAutosave } from '@/persistence/useAutosave';
+import { AppMenu } from '@/components/menu/AppMenu';
 
 const TOOL_HOTKEYS: Record<string, Tool> = {
   '1': 'selection', '2': 'rectangle', '3': 'ellipse', '4': 'line',
@@ -25,6 +29,8 @@ export default function App() {
   const [appState, setAppState] = useState<AppState>(createInitialAppState);
   const [elements, setElements] = useState<ExcalidrawElement[]>([]);
   const historyRef = useRef(new History());
+  // ⭐ Week 3：初始加载完成前不允许 autosave，防止刚起来就把空场景覆盖掉磁盘上的旧场景
+  const [hydrated, setHydrated] = useState(false);
 
   const elementsRef = useRef(elements);
   const selectedIdsRef = useRef(appState.selectedElementIds);
@@ -62,7 +68,6 @@ export default function App() {
     commitHistory(next, sel);
   };
 
-  // ✅ Week 2：Z-order / Group / 剪贴板
   const applyZOrder = (fn: (arr: ExcalidrawElement[], ids: Record<string, true>) => ExcalidrawElement[]) => {
     const sel = selectedIdsRef.current;
     if (Object.keys(sel).length === 0) return;
@@ -117,16 +122,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // ✅ 输入元素直接放行，避免拦截 textarea / input / contentEditable
       const t = e.target as HTMLElement | null;
-      if (
-        t &&
-        (t.tagName === 'INPUT' ||
-          t.tagName === 'TEXTAREA' ||
-          t.isContentEditable)
-      ) {
-        return;
-      }
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
       const meta = e.ctrlKey || e.metaKey;
 
@@ -149,7 +146,6 @@ export default function App() {
         patchAppState({ selectedElementIds: all }); return;
       }
 
-      // ✅ Week 2 快捷键
       if (meta && e.key.toLowerCase() === 'c') { e.preventDefault(); doCopy(); return; }
       if (meta && e.key.toLowerCase() === 'v') { e.preventDefault(); void doPaste(); return; }
       if (meta && e.key.toLowerCase() === 'd') { e.preventDefault(); doDuplicate(); return; }
@@ -172,15 +168,47 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // ⭐ Week 3：启动时先从 IndexedDB 加载场景；bench 优先级更高（压测用）
   useEffect(() => {
     const n = readBenchCount();
     if (n > 0) {
       const seeded = generateBenchElements(n);
       setElements(seeded);
       historyRef.current.push(seeded, {});
+      setHydrated(true);
+      return;
     }
+    (async () => {
+      try {
+        const scene = await loadScene();
+        if (scene) {
+          setElements(scene.elements);
+          setAppState(prev => ({ ...prev, ...scene.appState }));
+          historyRef.current.push(scene.elements, {});
+        }
+      } catch (e) {
+        console.error('[hydrate] load failed', e);
+      } finally {
+        setHydrated(true);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ⭐ Week 3：Autosave（500ms debounce）
+  const { status: saveStatus, flush } = useAutosave(elements, appState, hydrated, 500);
+
+  // ⭐ Week 3：从 JSON 导入
+  const importScene = (file: { elements: ExcalidrawElement[]; appState: Partial<AppState> }) => {
+    setElements(file.elements);
+    setAppState(prev => ({ ...prev, ...file.appState, selectedElementIds: {}, marquee: null }));
+    historyRef.current.push(file.elements, {});
+  };
+  const clearAll = () => {
+    setElements([]);
+    patchAppState({ selectedElementIds: {}, marquee: null });
+    historyRef.current.push([], {});
+  };
 
   const selected = elements.filter(el => appState.selectedElementIds[el.id]);
   return (
@@ -191,6 +219,14 @@ export default function App() {
         commitHistory={commitHistory}
       />
       <FpsMeter />
+      <AppMenu
+        elements={elements}
+        appState={appState}
+        saveStatus={saveStatus}
+        onFlush={flush}
+        onImportScene={importScene}
+        onClearScene={clearAll}
+      />
       <Toolbar
         currentTool={appState.currentTool}
         onToolChange={t => patchAppState({ currentTool: t })}
