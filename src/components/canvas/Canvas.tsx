@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExcalidrawElement, ExcalidrawTextElement } from '@/element/types';
 import type { AppState } from '@/state/appState';
 import type { Bounds } from '@/element/bounds';
 import { MAX_ZOOM, MIN_ZOOM } from '@/constants';
-import { screenToCanvas } from '@/utils/viewport';
+import { screenToCanvas, getViewportBounds } from '@/utils/viewport';
+// ⭐ Week 2：QuadTree 空间索引
+import { buildSceneIndex, queryPointCandidates, queryRectCandidates, queryViewport } from '@/element/spatialIndex';
 import { renderStaticLayer, renderOverlayLayer } from '@/renderer/renderScene';
 import {
   newElementByTool, mutateElementEnd, normalizeElement, pushFreedrawPoint,
@@ -77,6 +79,15 @@ function toolToCursor(tool: string, isSpaceDown: boolean, i: Interaction, h: Han
   }
 }
 
+// 把 appState.marquee 的 {x,y,width,height}（width/height 可能为负）标准化为 {x1,y1,x2,y2}
+function normalizeRect(m: { x: number; y: number; width: number; height: number }) {
+  const x1 = Math.min(m.x, m.x + m.width);
+  const y1 = Math.min(m.y, m.y + m.height);
+  const x2 = Math.max(m.x, m.x + m.width);
+  const y2 = Math.max(m.y, m.y + m.height);
+  return { x1, y1, x2, y2 };
+}
+
 function toLocal(p: { x: number; y: number }, selected: ExcalidrawElement[]) {
   if (selected.length === 1 && selected[0].angle) {
     const el = selected[0];
@@ -144,6 +155,9 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     setStaticTick(t => t + 1);
   }, []);
 
+  // ⭐ Week 2：从 elements 派生 QuadTree。elements ref 变才重建（拖动期间不 setElements，索引稳定）
+  const sceneIndex = useMemo(() => buildSceneIndex(elements), [elements]);
+
   // resize 两层 canvas 尺寸
   useEffect(() => {
     const resize = () => {
@@ -174,18 +188,21 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
   }, []);
 
-  // ⭐ 静态层：只画不在交互中的元素。依赖 elements + viewport + staticTick。
+  // ⭐ 静态层：视口裁剪 + 排除交互中的元素
   useEffect(() => {
     const canvas = staticCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const interactingIds = getInteractingIds(interactionRef.current);
+    // ⭐ Week 2：先按视口裁剪，再排除正在交互的元素
+    const viewport = getViewportBounds(appState, window.innerWidth, window.innerHeight);
+    const visible = queryViewport(sceneIndex, elements, viewport);
     const staticEls = interactingIds.size
-      ? elements.filter(el => !interactingIds.has(el.id))
-      : elements;
+      ? visible.filter(el => !interactingIds.has(el.id))
+      : visible;
     renderStaticLayer({ canvas, ctx, elements: staticEls, appState, dpr });
-  }, [elements, appState.zoom, appState.scrollX, appState.scrollY, dpr, staticTick]);
+  }, [elements, appState.zoom, appState.scrollX, appState.scrollY, dpr, staticTick, sceneIndex]);
 
   // ⭐ 覆盖层：画正在交互的元素 + 选中框 + marquee。每 tick 都重画（内容极少）。
   useEffect(() => {
@@ -319,7 +336,9 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
         }
       }
 
-      const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
+      // ⭐ Week 2：QuadTree 缩小候选集，再精确 hitTest
+      const candidates = queryPointCandidates(sceneIndex, elements, p.x, p.y);
+      const hit = [...candidates].reverse().find(el => hitTest(el, p.x, p.y));
       if (hit) {
         const groupExpanded = expandSelectionToGroup(elements, hit.id);
         let nextIds = { ...appState.selectedElementIds };
@@ -350,7 +369,9 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     if (appState.currentTool !== 'selection') return;
     if (interactionRef.current.type === 'text-edit') return;
     const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
-    const hit = [...elements].reverse().find(el => hitTest(el, p.x, p.y));
+    // ⭐ Week 2：候选集
+    const candidates = queryPointCandidates(sceneIndex, elements, p.x, p.y);
+    const hit = [...candidates].reverse().find(el => hitTest(el, p.x, p.y));
     if (hit && hit.type === 'text') {
       interactionRef.current = {
         type: 'text-edit', element: hit as ExcalidrawTextElement, isNew: false,
@@ -454,8 +475,11 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
     if (inter.type === 'marquee') {
       const m = appState.marquee;
       if (m) {
+        // ⭐ Week 2：QuadTree 缩小候选（marquee.width/height 可能为负，先归一化）
+        const rect = normalizeRect(m);
+        const cand = queryRectCandidates(sceneIndex, elements, rect);
         const nextIds: Record<string, true> = { ...appState.selectedElementIds };
-        for (const el of elements) if (hitMarquee(el, m)) nextIds[el.id] = true;
+        for (const el of cand) if (hitMarquee(el, m)) nextIds[el.id] = true;
         onAppStateChange({ selectedElementIds: nextIds, marquee: null });
       } else onAppStateChange({ marquee: null });
       interactionRef.current = { type: 'idle' };
