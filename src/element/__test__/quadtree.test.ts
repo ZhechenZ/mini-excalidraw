@@ -4,7 +4,7 @@
 // 运行：pnpm add -D vitest && pnpm vitest run
 
 import { describe, it, expect } from 'vitest';
-import { QuadTree, buildQuadTree } from '@/element/quadtree';
+import { buildQuadTree } from '@/element/quadtree';
 
 const B = (x1: number, y1: number, x2: number, y2: number) => ({ x1, y1, x2, y2 });
 

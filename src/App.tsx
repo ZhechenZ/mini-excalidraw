@@ -14,6 +14,13 @@ import { readBenchCount, generateBenchElements } from './utils/bench';
 import { AppMenu } from '@/components/menu/AppMenu';
 // ⭐ Week 4：CRDT 数据层（Yjs + y-indexeddb）
 import { useYSceneDoc } from '@/collab/useYSceneDoc';
+// ⭐ Week 5：实时协同（y-webrtc provider + awareness + presence UI）
+import { useYProvider } from '@/collab/provider';
+import { useAwareness } from '@/collab/awareness';
+import { RemoteCursors } from '@/components/collab/RemoteCursor';
+import { PresenceBar } from '@/components/collab/PresenceBar';
+import { ShareButton } from '@/components/collab/ShareButton';
+import { readRoomFromHash, generateRoomId, writeRoomToHash, type RoomRoute } from '@/utils/roomId';
 
 // ⭐ Week 4：CRDT 总开关。true = 走 Yjs + y-indexeddb（本周默认）；
 // false = 回退到 Week 3 的 useState + useAutosave 降级路径（此文件按 CRDT 模式实现）。
@@ -35,7 +42,32 @@ export default function App() {
   // setElements 与 React.Dispatch<SetStateAction> 完全兼容，Canvas 无需任何改动。
   const y = useYSceneDoc({ enabled: USE_CRDT });
   const elements = y.elements;
-  const setElements = y.setElements;
+
+  // ⭐ Week 5：房间路由（URL hash 唯一事实来源）。#room=xxx[&mode=view]
+  const [route, setRoute] = useState<RoomRoute>(() => readRoomFromHash());
+  useEffect(() => {
+    const onHash = () => setRoute(readRoomFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const { roomId, readOnly } = route;
+
+  // ⭐ Week 5：把 Week 4 的同一个 Y.Doc 交给 y-webrtc，得到 provider + awareness。
+  // 没有 roomId 时（单机模式）provider/awareness 为 null，一切退化为纯本地。
+  const { awareness, connected } = useYProvider(y.doc, roomId, { enabled: !!roomId });
+  const presence = useAwareness(awareness, { readOnly });
+
+  // ⭐ Week 5：只读模式禁用本地事务——直接把 setElements 换成 no-op。
+  // 只读用户仍能收到并渲染远端变更（provider 照常连接），但自己不产生任何写入。
+  const setElements = readOnly ? (() => {}) : y.setElements;
+
+  // ⭐ Week 5：发起协同——生成随机房间并写进 hash，触发进入协同模式。
+  const startRoom = (): string => {
+    const id = generateRoomId();
+    writeRoomToHash(id, false);
+    setRoute({ roomId: id, readOnly: false });
+    return id;
+  };
 
   const elementsRef = useRef(elements);
   const selectedIdsRef = useRef(appState.selectedElementIds);
@@ -48,9 +80,10 @@ export default function App() {
   }, [y.persistedAppState]);
 
   // patchAppState 现在同时负责：更新本地 UI 态 + 把持久化子集写进 Y.Doc。
+  // ⭐ Week 5：只读模式不写 Y（既不产生本地事务，也不干扰他人视口/工具）。
   const patchAppState = (patch: Partial<AppState>) => {
     setAppState(prev => ({ ...prev, ...patch }));
-    y.updateAppState(patch);
+    if (!readOnly) y.updateAppState(patch);
   };
 
   // ⭐ Week 4：撤销边界 = Y.transact 边界，由 UndoManager 自动管理。
@@ -197,13 +230,36 @@ export default function App() {
   };
 
   const selected = elements.filter(el => appState.selectedElementIds[el.id]);
+  // ⭐ Week 5：传给 Canvas 的 awareness 桥（只暴露两个 setter，避免耦合内部结构）。
+  const canvasAwareness = roomId
+    ? { setPointer: presence.setPointer, setSelectedIds: presence.setSelectedIds }
+    : undefined;
+
   return (
     <>
       <Canvas
         elements={elements} setElements={setElements}
         appState={appState} onAppStateChange={patchAppState}
         commitHistory={commitHistory}
+        awareness={canvasAwareness}
       />
+      {/* ⭐ Week 5：远端光标 + 选择框覆盖层（仅在房间内渲染） */}
+      {roomId && (
+        <RemoteCursors
+          remoteStates={presence.remoteStates}
+          elements={elements}
+          appState={appState}
+        />
+      )}
+      {/* ⭐ Week 5：分享按钮 + 在线用户列表 */}
+      <ShareButton roomId={roomId} readOnly={readOnly} onStartRoom={startRoom} />
+      {roomId && (
+        <PresenceBar
+          localUser={presence.localUser}
+          remoteStates={presence.remoteStates}
+          connected={connected}
+        />
+      )}
       <FpsMeter />
       <AppMenu
         elements={elements}
