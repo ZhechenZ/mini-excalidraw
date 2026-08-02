@@ -1,0 +1,147 @@
+/* Week 5：src/components/collab 目录下所有协同组件共享的样式表。
+ *
+ * 只放静态、不随每帧数据变化的样式；
+ * 每帧变化的坐标（left/top/width/height）和每个用户不同的颜色
+ * （border-color / background）由组件通过 inline style 传入，
+ * 不放进这里，避免每次渲染都要生成一条新的 CSS 规则。
+ *
+ * 目录里的组件都会 import './index.css'，Vite 会自动去重，只会打包一次。
+ */
+
+/* ============================================================
+ * RemoteCursors —— 远端光标 + 选择框覆盖层
+ * ============================================================ */
+
+/* 覆盖层容器：铺满全屏、不拦截交互、盖在画布最上层 */
+.remote-cursors-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  overflow: hidden;
+}
+
+/* 远端用户选择框：虚线描边矩形，颜色由 inline style 的 borderColor 决定 */
+.remote-selection-box {
+  position: absolute;
+  box-sizing: border-box;
+  border-style: dashed;
+  border-width: 1.5px;
+  border-radius: 2px;
+}
+
+/* 远端光标容器：跟随 pointer 移动，带 80ms 缓动过渡 */
+.remote-cursor {
+  position: absolute;
+  transform: translate(-2px, -2px);
+  transition: left 80ms linear, top 80ms linear;
+  will-change: left, top;
+}
+
+/* 光标旁的用户名 tooltip，背景色由 inline style 的 background 决定 */
+.remote-cursor-name {
+  position: absolute;
+  left: 16px;
+  top: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* ============================================================
+ * PresenceBar —— 右上角在线用户列表
+ * ============================================================ */
+
+/* 整体容器：固定在右上角的半透明胶囊 */
+.presence-bar {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(4px);
+}
+
+/* 连接状态小圆点，颜色由 inline style 决定（在线绿 / 离线灰） */
+.presence-bar__status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* "在线 N" 文案 */
+.presence-bar__count {
+  font-size: 12px;
+  color: #666;
+}
+
+/* 头像列表：横排 */
+.presence-bar__avatars {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 单个用户：头像圆点 + 名字 */
+.presence-avatar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 头像圆点，背景色由 inline style 的 background 决定（= awareness 颜色） */
+.presence-avatar__initial {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+/* 用户名文本 */
+.presence-avatar__name {
+  font-size: 12px;
+  color: #333;
+}
+
+/* ============================================================
+ * ShareButton —— 分享 / 复制邀请链接按钮
+ * ============================================================ */
+
+/* 按钮本体：默认蓝底白字，固定在 PresenceBar 左侧 */
+.share-button {
+  position: fixed;
+  top: 12px;
+  right: 220px;
+  z-index: 30;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 10px;
+  background: #1971c2;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  transition: background 160ms ease;
+}
+
+/* 复制成功后的短暂反馈状态：变绿 */
+.share-button--copied {
+  background: #2f9e44;
+}

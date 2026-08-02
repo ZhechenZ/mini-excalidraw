@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { IndexeddbPersistence } from 'y-indexeddb';
+import type * as Y from 'yjs';
 import type { ExcalidrawElement } from '@/element/types';
 import type { AppState } from '@/state/appState';
 import type { PersistedAppState } from '@/persistence/scene';
@@ -43,6 +44,10 @@ type ElementsUpdater =
 
 export interface UseYSceneDoc {
   ready: boolean;
+  // ⭐ Week 5：暴露底层 Y.Doc，供 useYProvider 把同一个 doc 交给 y-webrtc。
+  // 这是"业务层零改动接入协同"的关键——provider 与本地落盘共用同一 doc，
+  // 谁先谁后 attach 都不影响数据一致性（Yjs 的 update 是幂等可交换的）。
+  doc: Y.Doc;
   elements: ExcalidrawElement[];
   // 兼容 React.Dispatch<React.SetStateAction<ExcalidrawElement[]>>，Canvas 直接用。
   setElements: (update: ElementsUpdater) => void;
@@ -226,6 +231,7 @@ export function useYSceneDoc(options: { enabled: boolean }): UseYSceneDoc {
 
   return {
     ready,
+    doc,
     elements,
     setElements,
     persistedAppState,

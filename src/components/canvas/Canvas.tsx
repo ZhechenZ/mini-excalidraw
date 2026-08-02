@@ -29,6 +29,12 @@ interface CanvasProps {
   appState: AppState;
   onAppStateChange: (patch: Partial<AppState>) => void;
   commitHistory: (nextElements?: readonly ExcalidrawElement[], nextSelected?: Record<string, true>) => void;
+  // ⭐ Week 5：协同 awareness 桥接（可选）。单机模式下为 undefined，Canvas 行为不变。
+  // pointer 在 pointermove 时上报；selectedIds 在选区变化时上报（见下方 useEffect）。
+  awareness?: {
+    setPointer: (p: { x: number; y: number } | null) => void;
+    setSelectedIds: (ids: string[]) => void;
+  };
 }
 
 const DRAWABLE_TOOLS: readonly DrawableTool[] = ['rectangle', 'ellipse', 'line', 'arrow', 'freedraw'];
@@ -98,7 +104,7 @@ function toLocal(p: { x: number; y: number }, selected: ExcalidrawElement[]) {
 
 // 计算当前正在交互中的元素（应用 dx/dy/newBounds/currentAngle 后的样子）
 function computeInteractiveElements(
-  elements: ExcalidrawElement[],
+  _elements: ExcalidrawElement[],
   inter: Interaction,
 ): ExcalidrawElement[] {
   if (inter.type === 'draft') return [inter.element];
@@ -135,7 +141,7 @@ function getInteractingIds(inter: Interaction): Set<string> {
   return s;
 }
 
-export function Canvas({ elements, setElements, appState, onAppStateChange, commitHistory }: CanvasProps) {
+export function Canvas({ elements, setElements, appState, onAppStateChange, commitHistory, awareness }: CanvasProps) {
   // ⭐ Week 1：两层 canvas
   const staticCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -225,6 +231,12 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
       marquee: appState.marquee,
     });
   }, [elements, appState, dpr, overlayTick]);
+
+  // ⭐ Week 5：本地选区变化 → 广播 selectedIds，让远端画出"我选了哪些元素"。
+  // 选区存在 appState 里（不进 CRDT），所以在 Canvas 这层监听最直接。
+  useEffect(() => {
+    awareness?.setSelectedIds(Object.keys(appState.selectedElementIds));
+  }, [appState.selectedElementIds, awareness]);
 
   const onWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -384,6 +396,8 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
   const onPointerMove = (e: React.PointerEvent) => {
     const p = screenToCanvas({ x: e.clientX, y: e.clientY }, appState);
     onAppStateChange({ cursor: p });
+    // ⭐ Week 5：向房间广播本地指针（awareness 内部已节流，这里直接调用即可）。
+    awareness?.setPointer(p);
     const inter = interactionRef.current;
 
     if (inter.type === 'idle' && appState.currentTool === 'selection') {
@@ -544,6 +558,7 @@ export function Canvas({ elements, setElements, appState, onAppStateChange, comm
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onPointerLeave={() => awareness?.setPointer(null)}
         onDoubleClick={onDoubleClick}
         onWheel={onWheel}
         onKeyDown={onKeyDown}
